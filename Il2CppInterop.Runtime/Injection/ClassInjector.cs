@@ -1147,6 +1147,7 @@ public static unsafe partial class ClassInjector
         var fullName = GetIl2CppTypeFullName(typePointer);
         var type = Type.GetType(fullName)
             ?? Type.GetType(fullName.Contains('.') ? "Il2Cpp" + fullName : "Il2Cpp." + fullName)
+            ?? Type.GetType("Il2Cpp" + fullName.Split(", ")[0] + ", Il2Cpp" + fullName.Split(", ")[1])
             ?? throw new NullReferenceException($"Couldn't find System.Type for Il2Cpp type: {fullName}");
 
         INativeTypeStruct wrappedType = UnityVersionHandler.Wrap(typePointer);

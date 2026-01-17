@@ -42,6 +42,13 @@ namespace Il2CppInterop.Runtime.Injection.Hooks
 
         private static readonly MemoryUtils.SignatureDefinition[] s_Signatures =
         {
+            // Unity 2021.3.44 (x64)
+            new MemoryUtils.SignatureDefinition
+            {
+                pattern = "\x48\x89\x5C\x24\x08\x57\x48\x83\xec\x40\x0f\xb6\xfa\x48\x8b\xd9\x48\x85\xc9\x75\x56\xb8\x58",
+                mask = "xxxxxxxxxxxxxxxxxxxxxxx",
+                xref = false
+            },
             // Unity 2021.2.5 (x64)
             new MemoryUtils.SignatureDefinition
             {
