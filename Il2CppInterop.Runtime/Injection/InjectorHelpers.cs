@@ -153,8 +153,8 @@ namespace Il2CppInterop.Runtime.Injection
             // Vampire Survivors Class Init
             new MemoryUtils.SignatureDefinition
             {
-                pattern = "\xE8\x6f\x00\x01\x00\x41\xbc\x00\x08\x00",
-                mask = "xx?x?xx?x?",
+                pattern = "\xE8\x00\x00\x00\x00\x41\xbc\x00\x08\x00",
+                mask = "x????xxxxx",
                 xref = true
             },
             new MemoryUtils.SignatureDefinition
