@@ -12,11 +12,9 @@ using Il2CppInterop.Runtime.Runtime.VersionSpecific.MethodInfo;
 using Il2CppInterop.Runtime.Startup;
 using Microsoft.Extensions.Logging;
 using MonoMod.Cil;
-using MonoMod.RuntimeDetour;
 using MonoMod.Utils;
-using Detour = MonoMod.RuntimeDetour.Detour;
-using IDetour = Il2CppInterop.Runtime.Injection.IDetour;
 using ValueType = Il2CppSystem.ValueType;
+using Void = Il2CppSystem.Void;
 
 namespace Il2CppInterop.HarmonySupport;
 
@@ -59,8 +57,6 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
     };
 
     private static readonly List<object> DelegateCache = new();
-    private static readonly List<object> DetourCache = new();
-
     private INativeMethodInfoStruct modifiedNativeMethodInfo;
 
     private IDetour nativeDetour;
@@ -151,10 +147,8 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
         nativeDetour.Apply();
         modifiedNativeMethodInfo.MethodPointer = nativeDetour.OriginalTrampoline;
 
-        var detour = new Detour(Original, managedHookedMethod);
-        detour.Apply();
-        DetourCache.Add(detour);
-
+        // TODO: Add an ILHook for the original unhollowed method to go directly to managedHookedMethod
+        // Right now it goes through three times as much interop conversion as it needs to, when being called from managed side
         return managedHookedMethod;
     }
 
@@ -376,17 +370,46 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
     {
         variable = null;
 
-        if (managedParamType.IsSubclassOf(typeof(ValueType)))
+        bool needsBoxing = managedParamType.IsSubclassOf(typeof(ValueType));
+
+        if (needsBoxing)
         {
-            // Box struct into object first before conversion
-            il.Emit(OpCodes.Ldc_I8, Il2CppClassPointerStore.GetNativeClassPointer(managedParamType).ToInt64());
-            il.Emit(OpCodes.Conv_I);
-            // On x64, struct is always a pointer but it is a non-pointer on x86
-            // We don't handle byref structs on x86 yet but we're yet to encounter those
-            il.Emit(Environment.Is64BitProcess ? OpCodes.Ldarg : OpCodes.Ldarga_S, argIndex);
-            il.Emit(OpCodes.Call,
-                AccessTools.Method(typeof(IL2CPP),
-                    nameof(IL2CPP.il2cpp_value_box)));
+            var classPtr = Il2CppClassPointerStore.GetNativeClassPointer(managedParamType);
+
+            // il2cpp_value_box uses .NET boxing semantics which boxes Nullable<T> as just T,
+            // losing the HasValue field. Manually box Nullable<T> to preserve full data.
+            bool isNullable = managedParamType.IsGenericType &&
+                managedParamType.GetGenericTypeDefinition().FullName == "Il2CppSystem.Nullable`1";
+
+            if (isNullable)
+            {
+                uint align = 0;
+                var valueSize = IL2CPP.il2cpp_class_value_size(classPtr, ref align);
+
+                il.Emit(OpCodes.Ldc_I8, classPtr.ToInt64());
+                il.Emit(OpCodes.Conv_I);
+                il.Emit(OpCodes.Call, AccessTools.Method(typeof(IL2CPP), nameof(IL2CPP.il2cpp_object_new)));
+                var objLocal = il.DeclareLocal(typeof(IntPtr));
+                il.Emit(OpCodes.Stloc, objLocal);
+                il.Emit(Environment.Is64BitProcess ? OpCodes.Ldarg : OpCodes.Ldarga_S, argIndex);
+                il.Emit(OpCodes.Ldloc, objLocal);
+                il.Emit(OpCodes.Call, AccessTools.Method(typeof(IL2CPP), nameof(IL2CPP.il2cpp_object_unbox)));
+                il.Emit(OpCodes.Ldc_I4, (int)valueSize);
+                il.Emit(OpCodes.Call, AccessTools.Method(typeof(Il2CppDetourMethodPatcher), nameof(CopyMemory)));
+                il.Emit(OpCodes.Ldloc, objLocal);
+            }
+            else
+            {
+                // Box struct into object first before conversion
+                il.Emit(OpCodes.Ldc_I8, classPtr.ToInt64());
+                il.Emit(OpCodes.Conv_I);
+                // On x64, struct is always a pointer but it is a non-pointer on x86
+                // We don't handle byref structs on x86 yet but we're yet to encounter those
+                il.Emit(Environment.Is64BitProcess ? OpCodes.Ldarg : OpCodes.Ldarga_S, argIndex);
+                il.Emit(OpCodes.Call,
+                    AccessTools.Method(typeof(IL2CPP),
+                        nameof(IL2CPP.il2cpp_value_box)));
+            }
         }
         else
         {
@@ -430,8 +453,12 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
 
         if (managedParamType.IsByRef)
         {
-            // TODO: directType being ValueType is not handled yet (but it's not that common in games). Implement when needed.
             var directType = managedParamType.GetElementType();
+            // blittable value type pointer, note that ref to boxed Il2CppSystem.ValueType wrapper is still not handled
+            if (directType.IsValueType)
+                return;
+
+            // TODO: directType being Il2CppSystem.ValueType is not handled yet (but it's not that common in games). Implement when needed.
 
             variable = il.DeclareLocal(directType);
 
@@ -447,4 +474,7 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
             HandleTypeConversion(managedParamType);
         }
     }
+
+    private static void CopyMemory(IntPtr src, IntPtr dest, int size) =>
+        Buffer.MemoryCopy(src.ToPointer(), dest.ToPointer(), size, size);
 }
